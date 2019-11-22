@@ -16,6 +16,8 @@ import           Data.Binary                    ( encode )
 import qualified Data.ByteString.Base16        as Base16
 import qualified Data.ByteString.Char8         as BS
 import qualified Data.Digest.Pure.SHA          as SHA
+import           Data.Text.Prettyprint.Doc      ( (<+>) )
+import qualified Data.Text.Prettyprint.Doc     as PP
 import           Data.Void                      ( Void )
 import qualified Text.Megaparsec               as P
 import qualified Text.Megaparsec.Char          as P
@@ -38,6 +40,17 @@ data Expr
     -- | Represents a sequence of bytes, e.g. `xDEADBEAF"
     | Bytes ByteString
     deriving (Eq, Show)
+
+prettyBytes :: ByteString -> PP.Doc ann
+prettyBytes bytes = "x" <> PP.pretty (BS.unpack bytes)
+
+instance PP.Pretty Expr where
+    pretty e = case e of
+        Tuple es -> "(" <> PP.prettyList es <> ")"
+        Record els -> "(" <> PP.hsep (map (\(Label l, e) -> PP.pretty l <> ":" <+> PP.pretty e) els) <> ")"
+        Number n -> PP.pretty n
+        Str txt -> PP.pretty txt
+        Bytes b -> prettyBytes b
 
 -- | Represents the result of hashing an expression
 newtype Hash = Hash { getHash :: ByteString } deriving (Eq)
