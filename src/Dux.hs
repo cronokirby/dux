@@ -6,6 +6,7 @@ module Dux
     , Hash
     , prettyHash
     , hashExpr
+    , parseExpr
     )
 where
 
@@ -13,7 +14,13 @@ import           Relude
 
 import           Data.Binary                    ( encode )
 import qualified Data.ByteString.Base16        as Base16
+import qualified Data.ByteString.Char8         as BS
 import qualified Data.Digest.Pure.SHA          as SHA
+import           Data.Void                      ( Void )
+import qualified Text.Megaparsec               as P
+import qualified Text.Megaparsec.Char          as P
+import qualified Text.Megaparsec.Char.Lexer    as L
+
 
 -- | Represents the label for a record
 newtype Label = Label Text deriving (Eq, Show)
@@ -64,3 +71,68 @@ hashExpr expr = case expr of
         combine "record-element" [hashLabel label, hashExpr expr]
     hashLabel :: Label -> Hash
     hashLabel (Label txt) = hashBytes ("label" <> encodeUtf8 txt)
+
+type Parser = P.Parsec Void Text
+
+sc :: Parser ()
+sc = L.space P.space1 empty empty
+
+lexeme :: Parser a -> Parser a
+lexeme = L.lexeme sc
+
+symbol :: Text -> Parser Text
+symbol = L.symbol sc
+
+parens :: Parser a -> Parser a
+parens = P.between (symbol "(") (symbol ")")
+
+int :: Parser Integer
+int = lexeme L.decimal
+
+string :: Parser Text
+string =
+    fromString <$> lexeme (P.char '"' *> P.manyTill L.charLiteral (P.char '"'))
+
+label :: Parser Text
+label = fromString <$> lexeme go
+  where
+    go = do
+        c    <- P.letterChar
+        rest <- P.manyTill (P.letterChar <|> P.digitChar) (P.char ':')
+        return (one c <> rest)
+
+bytes :: Parser ByteString
+bytes = lexeme $ do
+    _      <- P.char 'x'
+    digits <- P.some P.hexDigitChar
+    return (BS.pack (convert digits))
+  where
+    hexToInt :: Char -> Int
+    hexToInt c | c <= '9'  = ord c - ord '0'
+               | c <= 'F'  = ord c - ord 'A'
+               | otherwise = ord c - ord 'a'
+    join :: Char -> Char -> Char
+    join x1 x2 = chr (16 * hexToInt x1 + hexToInt x2)
+    convert :: String -> String
+    convert []             = []
+    convert [x           ] = [join x '0']
+    convert (x1 : x2 : xs) = join x1 x2 : convert xs
+
+expr :: Parser Expr
+expr = sc *> (number <|> str <|> bytestr <|> P.try tuple <|> P.try record)
+  where
+    tuple :: Parser Expr
+    tuple = Tuple <$> parens (expr `P.sepBy` symbol ",")
+    record :: Parser Expr
+    record = Record <$> parens (recordEl `P.sepBy` symbol ",")
+    recordEl :: Parser (Label, Expr)
+    recordEl = (,) <$> (Label <$> label) <*> expr
+    number :: Parser Expr
+    number = Number . fromInteger <$> int
+    str :: Parser Expr
+    str = Str <$> string
+    bytestr :: Parser Expr
+    bytestr = Bytes <$> bytes
+
+parseExpr :: Text -> Either (P.ParseErrorBundle Text Void) Expr
+parseExpr = P.parse expr ""
